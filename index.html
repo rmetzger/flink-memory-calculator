@@ -1,0 +1,1371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Flink TaskManager Memory Calculator</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --border: #d9d9d9;
+    --header: #fafafa;
+    --text: #262626;
+    --muted: #8c8c8c;
+    --accent: #1890ff;
+    --error-bg: #fff1f0;
+    --error-border: #ffa39e;
+    --error-text: #cf1322;
+    --heap: #b7eb8f;
+    --heap-dark: #52c41a;
+    --offheap: #91d5ff;
+    --offheap-dark: #1890ff;
+    --network: #ffd591;
+    --network-dark: #fa8c16;
+    --managed: #d3adf7;
+    --managed-dark: #722ed1;
+    --jvm: #ffadd2;
+    --jvm-dark: #eb2f96;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    margin: 0;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+  h1 {
+    font-size: 18px;
+    margin: 0 0 16px 0;
+  }
+  h2 {
+    font-size: 14px;
+    margin: 0 0 8px 0;
+    color: var(--text);
+  }
+  .subtitle {
+    color: var(--muted);
+    margin: -12px 0 16px 0;
+    font-size: 12px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: 16px;
+    align-items: start;
+  }
+  @media (max-width: 1000px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+  }
+  .card-title {
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+    margin: -12px -16px 12px -16px;
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-top: 8px;
+    background: var(--header);
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+  }
+  .config-row {
+    display: grid;
+    grid-template-columns: 1fr 110px 26px;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .config-row label {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text);
+  }
+  .config-row .default {
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: normal;
+  }
+  .config-row input[type=text] {
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 3px 6px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 12px;
+    width: 100%;
+  }
+  .config-row input[type=text]:focus {
+    border-color: var(--accent);
+    outline: none;
+  }
+  .config-row input[type=text].set {
+    background: #e6f7ff;
+    border-color: var(--accent);
+  }
+  .reset-btn {
+    border: 1px solid var(--border);
+    background: #fff;
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--muted);
+    padding: 2px 4px;
+    font-size: 11px;
+    line-height: 1;
+  }
+  .reset-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .slider-row {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: -2px;
+    margin-bottom: 4px;
+  }
+  .slider-row input[type=range] {
+    flex: 1;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .slider-row .tick {
+    color: var(--muted);
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    min-width: 28px;
+    text-align: center;
+  }
+  .section-divider {
+    grid-column: 1 / -1;
+    border-top: 1px dashed var(--border);
+    margin: 6px 0;
+    padding-top: 6px;
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+  .help {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+  .error {
+    background: var(--error-bg);
+    border: 1px solid var(--error-border);
+    color: var(--error-text);
+    padding: 8px 12px;
+    border-radius: 3px;
+    font-size: 12px;
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  table.memtable {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  table.memtable th,
+  table.memtable td {
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    text-align: left;
+    vertical-align: middle;
+  }
+  table.memtable th {
+    background: var(--header);
+    font-weight: 600;
+  }
+  table.memtable td.label-cell {
+    background: var(--header);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  table.memtable .diagram-cell {
+    width: 1px;
+    padding: 0;
+    background: #fff;
+    vertical-align: top;
+  }
+  table.memtable .value-cell {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    text-align: right;
+    white-space: nowrap;
+  }
+  .summary-row td {
+    background: #f0f5ff;
+    font-weight: 600;
+  }
+  /* Memory model SVG diagram */
+  .diagram {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 64px;
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+  /* The "process memory" outer box */
+  .mm-svg-wrap {
+    display: flex;
+    align-items: stretch;
+  }
+  .mm-svg {
+    display: block;
+  }
+  /* Right column: top summary + memory table */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .summary-card {
+    background: var(--header);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+  }
+  .summary-card .label {
+    color: var(--muted);
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+  .summary-card .value {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .summary-card .bytes {
+    color: var(--muted);
+    font-size: 10px;
+    margin-top: 2px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  /* Bar chart */
+  .bar {
+    display: flex;
+    height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 6px;
+    margin-bottom: 4px;
+  }
+  .bar-seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #000;
+    font-size: 10px;
+    font-weight: 500;
+    text-shadow: 0 0 2px rgba(255,255,255,0.6);
+    overflow: hidden;
+    white-space: nowrap;
+    border-right: 1px solid rgba(0,0,0,0.1);
+    cursor: default;
+  }
+  .bar-seg:last-child { border-right: none; }
+  .bar-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text);
+    margin-bottom: 12px;
+  }
+  .swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    border: 1px solid rgba(0,0,0,0.1);
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  .footer {
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 16px;
+    line-height: 1.5;
+  }
+  .footer a { color: var(--accent); }
+  details summary {
+    cursor: pointer;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .hier-wrap {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 12px;
+    align-items: stretch;
+  }
+  @media (max-width: 1200px) {
+    .hier-wrap { grid-template-columns: 1fr; }
+  }
+  .hier {
+    display: flex;
+    flex-direction: column;
+    font-size: 10px;
+    color: var(--text);
+    /* Match table height visually; will be auto */
+  }
+  .hier-box {
+    border: 1px solid #595959;
+    background: #fff;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    text-align: center;
+    line-height: 1.2;
+    overflow: hidden;
+  }
+  .hier-box.process {
+    border: 2px dashed #595959;
+    padding: 4px;
+    gap: 2px;
+  }
+  .hier-box.flink {
+    border: 1px dashed #595959;
+    padding: 4px;
+    gap: 2px;
+    margin-bottom: 2px;
+    background: #fafafa;
+  }
+  .hier-box.group {
+    border: 1px dashed #8c8c8c;
+    padding: 4px;
+    gap: 2px;
+    margin-bottom: 2px;
+    background: #fff;
+  }
+  .hier-box-label {
+    font-size: 9px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-weight: 600;
+  }
+  .hier-leaf {
+    border: 1px solid rgba(0,0,0,0.18);
+    border-radius: 2px;
+    padding: 2px 4px;
+    color: #000;
+    text-shadow: 0 0 2px rgba(255,255,255,0.5);
+    font-size: 10px;
+    line-height: 1.15;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+  }
+  .hier-leaf .hl-name { font-weight: 600; }
+  .hier-leaf .hl-size { font-family: ui-monospace, SFMono-Regular, monospace; }
+  pre.dyn-args {
+    background: #f5f5f5;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 8px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+<h1>Flink TaskManager Memory Calculator</h1>
+<p class="subtitle">
+  Edit any TaskManager memory configuration parameter and see the resulting effective memory sizes.
+  Logic mirrors the Java code in <code>TaskExecutorFlinkMemoryUtils</code> / <code>ProcessMemoryUtils</code>.
+</p>
+
+<div class="layout">
+  <div>
+    <div class="card">
+      <div class="card-title">Configuration</div>
+      <div id="config-form"></div>
+      <p class="help">
+        Leave a field empty to use the default (or to let Flink derive it).
+        Highlighted fields are explicitly set. Click <strong>×</strong> to reset.
+        Accepts <code>b</code>, <code>k</code>/<code>kb</code>, <code>m</code>/<code>mb</code>, <code>g</code>/<code>gb</code>, <code>t</code>/<code>tb</code>.
+        Numbers without unit are bytes.
+      </p>
+    </div>
+    <div class="card">
+      <div class="card-title">Quick presets</div>
+      <button class="reset-btn" data-preset="default">Default (1728m process)</button>
+      <button class="reset-btn" data-preset="fine">Fine-grained (task + managed)</button>
+      <button class="reset-btn" data-preset="flink">Total Flink Memory</button>
+      <button class="reset-btn" data-preset="large">Large (8g process)</button>
+      <button class="reset-btn" data-preset="clear">Clear all</button>
+    </div>
+  </div>
+
+  <div>
+    <div id="error-box"></div>
+    <div id="summary"></div>
+    <div class="card">
+      <div class="card-title">Memory breakdown</div>
+      <div id="bar-container"></div>
+      <div class="hier-wrap">
+        <div id="hier-container"></div>
+        <div id="memtable-container"></div>
+      </div>
+    </div>
+    <div class="card">
+      <details>
+        <summary>Generated JVM arguments &amp; dynamic configs</summary>
+        <h2>JVM arguments</h2>
+        <pre class="dyn-args" id="jvm-args"></pre>
+        <h2>Effective dynamic configs</h2>
+        <pre class="dyn-args" id="dyn-configs"></pre>
+      </details>
+    </div>
+  </div>
+</div>
+
+<p class="footer">
+  References:
+  <a href="https://nightlies.apache.org/flink/flink-docs-stable/docs/deployment/memory/mem_setup_tm/">TM memory setup</a> ·
+  <a href="https://nightlies.apache.org/flink/flink-docs-release-2.2/docs/deployment/memory/mem_setup/">memory setup</a> ·
+  <a href="https://nightlies.apache.org/flink/flink-docs-release-2.2/docs/deployment/memory/mem_tuning/">memory tuning</a>.
+  Behavior is ported from <code>flink-runtime</code>:
+  <code>TaskExecutorFlinkMemoryUtils.java</code>, <code>ProcessMemoryUtils.java</code>,
+  <code>TaskManagerOptions.java</code>, <code>MemorySize.java</code>.
+</p>
+
+<script>
+//
+// ============================================================================
+// Memory configuration constants — mirrors Flink TaskManagerOptions defaults.
+// ============================================================================
+//
+
+const LONG_MAX = (1n << 63n) - 1n; // Long.MAX_VALUE
+const MIB = 1024n * 1024n;
+
+// All TaskManager memory config options with defaults.
+// `defaultValue: null` means noDefaultValue() in Flink.
+const OPTIONS = [
+  { key: 'taskmanager.memory.process.size', label: 'Total Process Memory', type: 'memory', defaultValue: null, group: 'totals' },
+  { key: 'taskmanager.memory.flink.size', label: 'Total Flink Memory', type: 'memory', defaultValue: null, group: 'totals' },
+
+  { key: 'taskmanager.memory.framework.heap.size', label: 'Framework Heap', type: 'memory', defaultValue: '128m', group: 'framework' },
+  { key: 'taskmanager.memory.framework.off-heap.size', label: 'Framework Off-Heap', type: 'memory', defaultValue: '128m', group: 'framework' },
+
+  { key: 'taskmanager.memory.task.heap.size', label: 'Task Heap', type: 'memory', defaultValue: null, group: 'task' },
+  { key: 'taskmanager.memory.task.off-heap.size', label: 'Task Off-Heap', type: 'memory', defaultValue: '0', group: 'task' },
+
+  { key: 'taskmanager.memory.managed.size', label: 'Managed Memory size', type: 'memory', defaultValue: null, group: 'managed' },
+  { key: 'taskmanager.memory.managed.fraction', label: 'Managed Memory fraction', type: 'float', defaultValue: 0.4, group: 'managed' },
+
+  { key: 'taskmanager.memory.network.min', label: 'Network min', type: 'memory', defaultValue: '64m', group: 'network' },
+  { key: 'taskmanager.memory.network.max', label: 'Network max', type: 'memory', defaultValue: 'MAX', group: 'network' },
+  { key: 'taskmanager.memory.network.fraction', label: 'Network fraction', type: 'float', defaultValue: 0.1, group: 'network' },
+
+  { key: 'taskmanager.memory.jvm-metaspace.size', label: 'JVM Metaspace', type: 'memory', defaultValue: '256m', group: 'jvm' },
+  { key: 'taskmanager.memory.jvm-overhead.min', label: 'JVM Overhead min', type: 'memory', defaultValue: '192m', group: 'jvm' },
+  { key: 'taskmanager.memory.jvm-overhead.max', label: 'JVM Overhead max', type: 'memory', defaultValue: '1g', group: 'jvm' },
+  { key: 'taskmanager.memory.jvm-overhead.fraction', label: 'JVM Overhead fraction', type: 'float', defaultValue: 0.1, group: 'jvm' },
+];
+
+const GROUP_TITLES = {
+  totals: 'Totals (configure one of these)',
+  framework: 'Framework',
+  task: 'Task',
+  managed: 'Managed',
+  network: 'Network',
+  jvm: 'JVM (Metaspace + Overhead)',
+};
+
+// Current user-entered config; key -> raw string (empty string = not set).
+const userConfig = {};
+
+//
+// ============================================================================
+// MemorySize — ported from MemorySize.java. Uses BigInt for bytes.
+// ============================================================================
+//
+
+const UNIT_MULTIPLIERS = {
+  b: 1n, bytes: 1n,
+  k: 1024n, kb: 1024n, kibibytes: 1024n,
+  m: 1024n * 1024n, mb: 1024n * 1024n, mebibytes: 1024n * 1024n,
+  g: 1024n ** 3n, gb: 1024n ** 3n, gibibytes: 1024n ** 3n,
+  t: 1024n ** 4n, tb: 1024n ** 4n, tebibytes: 1024n ** 4n,
+};
+
+// parseBytes(text) → BigInt bytes. Mirrors MemorySize.parseBytes.
+function parseBytes(text) {
+  if (text === null || text === undefined) {
+    throw new Error('text cannot be null');
+  }
+  const trimmed = String(text).trim();
+  if (trimmed === '') {
+    throw new Error('argument is an empty- or whitespace-only string');
+  }
+  const m = trimmed.match(/^(\d+)\s*([a-zA-Z]*)$/);
+  if (!m) {
+    throw new Error(`Could not parse memory size '${text}'`);
+  }
+  const number = m[1];
+  const unit = m[2].toLowerCase();
+  if (number === '') {
+    throw new Error('text does not start with a number');
+  }
+  let value;
+  try {
+    value = BigInt(number);
+  } catch (e) {
+    throw new Error(`Could not parse number '${number}'`);
+  }
+  let multiplier = 1n;
+  if (unit !== '') {
+    if (!(unit in UNIT_MULTIPLIERS)) {
+      throw new Error(`Memory size unit '${unit}' does not match any recognized unit (b, k, m, g, t, kb, mb, gb, tb)`);
+    }
+    multiplier = UNIT_MULTIPLIERS[unit];
+  }
+  const result = value * multiplier;
+  if (result > LONG_MAX) {
+    throw new Error(`The value '${text}' cannot be represented as a 64bit number of bytes (overflow)`);
+  }
+  return result;
+}
+
+// Mirrors MemorySize.multiply(double): uses BigDecimal math semantics.
+// We turn the float into an exact ratio (numerator/denominator) using its
+// shortest-roundtrip string representation, then do exact BigInt math and
+// truncate (matching BigDecimal.longValue()).
+function multiplyBytes(bytes, fraction) {
+  if (fraction < 0) {
+    throw new Error('multiplier must be >= 0');
+  }
+  // Stringify; this gives the shortest round-trip decimal (same approach
+  // Java's Double.toString uses, which BigDecimal.valueOf(double) wraps).
+  let s = String(fraction);
+  // Handle scientific notation by widening if needed.
+  if (s.includes('e') || s.includes('E')) {
+    // Fall back: avoid scientific by using toFixed with enough digits.
+    s = fraction.toFixed(20).replace(/0+$/, '').replace(/\.$/, '');
+  }
+  let neg = false;
+  if (s.startsWith('-')) { neg = true; s = s.slice(1); }
+  let num, denom;
+  const dot = s.indexOf('.');
+  if (dot < 0) {
+    num = BigInt(s);
+    denom = 1n;
+  } else {
+    const intPart = s.slice(0, dot);
+    const decPart = s.slice(dot + 1);
+    num = BigInt((intPart || '0') + decPart);
+    denom = 10n ** BigInt(decPart.length);
+  }
+  if (neg) num = -num;
+  // (bytes * num) / denom, truncated toward zero — matches BigDecimal.longValue().
+  const product = bytes * num;
+  // BigInt division truncates toward zero, just like longValue() of a positive BigDecimal.
+  return product / denom;
+}
+
+function addBytes(a, b) { return a + b; }
+function subBytes(a, b) {
+  if (b > a) {
+    throw new Error(`Subtraction underflow: ${humanReadable(a)} - ${humanReadable(b)}`);
+  }
+  return a - b;
+}
+
+// Mirrors MemorySize.toHumanReadableString().
+function humanReadable(bytes) {
+  if (bytes === LONG_MAX) return '∞ (Long.MAX_VALUE)';
+  const ORDERED = [
+    { name: 'bytes', mult: 1n },
+    { name: 'kb',    mult: 1024n },
+    { name: 'mb',    mult: 1024n ** 2n },
+    { name: 'gb',    mult: 1024n ** 3n },
+    { name: 'tb',    mult: 1024n ** 4n },
+  ];
+  let highest = ORDERED[0];
+  for (const u of ORDERED) {
+    if (bytes > u.mult) highest = u;
+  }
+  if (highest.name === 'bytes') return `${bytes} bytes`;
+  const approximate = Number(bytes * 1000n / highest.mult) / 1000;
+  return `${approximate.toFixed(3)}${highest.name} (${bytes} bytes)`;
+}
+
+// Pretty display, e.g. "256 mb" for exact values, "966 mb" or "1.69 gb" for
+// inexact ones. Picks the largest unit where the value is >= 1, then trims
+// trailing zeros after the decimal point. Used for human-facing display
+// (bar, legend, hierarchy, table "Effective size" column).
+function prettySize(bytes) {
+  if (bytes === LONG_MAX) return '∞';
+  if (bytes === 0n) return '0 b';
+  const ORDERED = [
+    { name: 'bytes', mult: 1n },
+    { name: 'kb',    mult: 1024n },
+    { name: 'mb',    mult: 1024n ** 2n },
+    { name: 'gb',    mult: 1024n ** 3n },
+    { name: 'tb',    mult: 1024n ** 4n },
+  ];
+  // Find the largest unit where bytes >= unit.mult (i.e. the value would
+  // be at least 1 of that unit).
+  let picked = ORDERED[0];
+  for (const u of ORDERED) {
+    if (bytes >= u.mult) picked = u;
+  }
+  if (picked.name === 'bytes') return `${bytes} b`;
+  // Exact multiple? show as integer.
+  if (bytes % picked.mult === 0n) {
+    return `${bytes / picked.mult} ${picked.name}`;
+  }
+  // Otherwise: 3 decimals, trimmed.
+  const scaled = Number(bytes * 1000n / picked.mult) / 1000;
+  // Trim trailing zeros: "966.000" -> "966", "1.690" -> "1.69".
+  const str = scaled.toFixed(3).replace(/\.?0+$/, '');
+  return `${str} ${picked.name}`;
+}
+
+// Compact display, e.g. "256 mb" — mirrors MemorySize.toString() (highest exact unit).
+function compactString(bytes) {
+  if (bytes === LONG_MAX) return '∞';
+  const ORDERED = [
+    { name: 'bytes', mult: 1n },
+    { name: 'kb',    mult: 1024n },
+    { name: 'mb',    mult: 1024n ** 2n },
+    { name: 'gb',    mult: 1024n ** 3n },
+    { name: 'tb',    mult: 1024n ** 4n },
+  ];
+  let highest = ORDERED[0];
+  for (let i = 0; i < ORDERED.length; i++) {
+    if (bytes % ORDERED[i].mult !== 0n) {
+      highest = i === 0 ? ORDERED[0] : ORDERED[i - 1];
+      break;
+    } else if (i === ORDERED.length - 1) {
+      highest = ORDERED[i];
+    }
+  }
+  return `${bytes / highest.mult} ${highest.name}`;
+}
+
+//
+// ============================================================================
+// Range/fraction helpers — mirror RangeFraction.java + ProcessMemoryUtils.
+// ============================================================================
+//
+
+function makeRangeFraction(minSize, maxSize, fraction) {
+  if (minSize > maxSize) {
+    throw new Error('min value must be less or equal to max value');
+  }
+  if (fraction < 0 || fraction >= 1) {
+    throw new Error('fraction must be in range [0, 1)');
+  }
+  return { minSize, maxSize, fraction };
+}
+
+function capToMinMax(_description, relative, rangeFraction) {
+  let size = relative;
+  if (size > rangeFraction.maxSize) size = rangeFraction.maxSize;
+  else if (size < rangeFraction.minSize) size = rangeFraction.minSize;
+  return size;
+}
+
+function deriveWithFraction(description, base, rangeFraction) {
+  const relative = multiplyBytes(base, rangeFraction.fraction);
+  return capToMinMax(description, relative, rangeFraction);
+}
+
+function deriveWithInverseFraction(description, base, rangeFraction) {
+  if (!(rangeFraction.fraction < 1)) throw new Error('fraction must be < 1');
+  // base * (f / (1 - f))
+  // Implemented in two steps to mirror the Java BigDecimal precision:
+  //   relative = base * f / (1 - f)
+  // Java code is: base.multiply(f / (1 - f)) — i.e. it computes the double
+  // ratio first, then multiplies with BigDecimal precision. We do the same.
+  const ratio = rangeFraction.fraction / (1 - rangeFraction.fraction);
+  const relative = multiplyBytes(base, ratio);
+  return capToMinMax(description, relative, rangeFraction);
+}
+
+//
+// ============================================================================
+// Configuration value access — mirrors `Configuration#get` / `#contains`.
+// ============================================================================
+//
+
+function isSet(key) {
+  return userConfig[key] !== undefined && userConfig[key] !== '';
+}
+
+// Returns the option metadata.
+function opt(key) {
+  return OPTIONS.find(o => o.key === key);
+}
+
+// Returns the effective value for a memory option (as BigInt bytes).
+// If the user has set it, parses that; else uses the option's default.
+// Throws if both user-unset and no default (noDefaultValue).
+function getMemory(key) {
+  const o = opt(key);
+  if (isSet(key)) {
+    return parseBytes(userConfig[key]);
+  }
+  if (o.defaultValue === null) {
+    throw new Error(`The memory option ${key} is not set and has no default value.`);
+  }
+  if (o.defaultValue === 'MAX') return LONG_MAX;
+  return parseBytes(o.defaultValue);
+}
+
+// Returns the effective value for a float option.
+function getFloat(key) {
+  const o = opt(key);
+  if (isSet(key)) {
+    const v = parseFloat(userConfig[key]);
+    if (Number.isNaN(v)) throw new Error(`'${key}' is not a valid number: '${userConfig[key]}'`);
+    return v;
+  }
+  return o.defaultValue;
+}
+
+//
+// ============================================================================
+// TaskExecutorFlinkMemoryUtils logic — ported 1:1 from the Java code.
+// ============================================================================
+//
+
+function getNetworkMemoryRangeFraction() {
+  const min = getMemory('taskmanager.memory.network.min');
+  const max = getMemory('taskmanager.memory.network.max');
+  const frac = getFloat('taskmanager.memory.network.fraction');
+  try {
+    return makeRangeFraction(min, max, frac);
+  } catch (e) {
+    throw new Error(`Inconsistently configured taskmanager.memory.network.fraction (${frac}) and its min (${humanReadable(min)}), max (${humanReadable(max)}) value: ${e.message}`);
+  }
+}
+
+function getManagedMemoryRangeFraction() {
+  const frac = getFloat('taskmanager.memory.managed.fraction');
+  return makeRangeFraction(0n, LONG_MAX, frac);
+}
+
+function getJvmOverheadRangeFraction() {
+  const min = getMemory('taskmanager.memory.jvm-overhead.min');
+  const max = getMemory('taskmanager.memory.jvm-overhead.max');
+  const frac = getFloat('taskmanager.memory.jvm-overhead.fraction');
+  try {
+    return makeRangeFraction(min, max, frac);
+  } catch (e) {
+    throw new Error(`Inconsistently configured jvm-overhead.fraction (${frac}) and its min (${humanReadable(min)}), max (${humanReadable(max)}) value: ${e.message}`);
+  }
+}
+
+function deriveManagedAbsoluteOrFraction(base) {
+  if (isSet('taskmanager.memory.managed.size')) {
+    return getMemory('taskmanager.memory.managed.size');
+  }
+  return deriveWithFraction('managed memory', base, getManagedMemoryRangeFraction());
+}
+
+function sanityCheckNetworkMemory(derivedNetwork, totalFlink) {
+  const rf = getNetworkMemoryRangeFraction();
+  if (derivedNetwork > rf.maxSize || derivedNetwork < rf.minSize) {
+    throw new Error(
+      `Derived Network Memory size (${humanReadable(derivedNetwork)}) is not in configured Network Memory range [${humanReadable(rf.minSize)}, ${humanReadable(rf.maxSize)}].`
+    );
+  }
+}
+function sanityCheckNetworkMemoryWithExplicit(derivedNetwork, totalFlink) {
+  try {
+    sanityCheckNetworkMemory(derivedNetwork, totalFlink);
+  } catch (e) {
+    throw new Error(
+      'If Total Flink, Task Heap and (or) Managed Memory sizes are explicitly configured then ' +
+      'the Network Memory size is the rest of the Total Flink memory after subtracting all other ' +
+      'configured types of memory, but the derived Network Memory is inconsistent with its configuration. ' +
+      `Cause: ${e.message}`
+    );
+  }
+}
+
+function sanityCheckTotalFlinkMemory(flinkInternal) {
+  if (isSet('taskmanager.memory.flink.size')) {
+    const configured = getMemory('taskmanager.memory.flink.size');
+    if (configured !== flinkInternal.totalFlink) {
+      throw new Error(
+        `Configured and Derived Flink internal memory sizes (total ${humanReadable(flinkInternal.totalFlink)}) do not add up to the configured Total Flink Memory size (${humanReadable(configured)}). ` +
+        `Configured and Derived Flink internal memory sizes are: ` +
+        `Framework Heap (${humanReadable(flinkInternal.frameworkHeap)}), ` +
+        `Framework Off-Heap (${humanReadable(flinkInternal.frameworkOffHeap)}), ` +
+        `Task Heap (${humanReadable(flinkInternal.taskHeap)}), ` +
+        `Task Off-Heap (${humanReadable(flinkInternal.taskOffHeap)}), ` +
+        `Network (${humanReadable(flinkInternal.network)}), ` +
+        `Managed (${humanReadable(flinkInternal.managed)}).`
+      );
+    }
+  }
+}
+
+function makeFlinkMemory(fh, fo, th, to, net, man) {
+  return {
+    frameworkHeap: fh,
+    frameworkOffHeap: fo,
+    taskHeap: th,
+    taskOffHeap: to,
+    network: net,
+    managed: man,
+    get jvmHeap() { return fh + th; },
+    get jvmDirect() { return fo + to + net; },
+    get totalFlink() { return fh + fo + th + to + net + man; },
+  };
+}
+
+// Derive when both TASK_HEAP and MANAGED are explicitly configured.
+// Mirrors TaskExecutorFlinkMemoryUtils.deriveFromRequiredFineGrainedOptions.
+function deriveFromFineGrained() {
+  const taskHeap = getMemory('taskmanager.memory.task.heap.size');
+  const managed = getMemory('taskmanager.memory.managed.size');
+  const frameworkHeap = getMemory('taskmanager.memory.framework.heap.size');
+  const frameworkOffHeap = getMemory('taskmanager.memory.framework.off-heap.size');
+  const taskOffHeap = getMemory('taskmanager.memory.task.off-heap.size');
+
+  const flinkExcludeNetwork = frameworkHeap + frameworkOffHeap + taskHeap + taskOffHeap + managed;
+  let network;
+
+  if (isSet('taskmanager.memory.flink.size')) {
+    const totalFlink = getMemory('taskmanager.memory.flink.size');
+    if (flinkExcludeNetwork > totalFlink) {
+      throw new Error(
+        `Sum of configured Framework Heap (${humanReadable(frameworkHeap)}), Framework Off-Heap (${humanReadable(frameworkOffHeap)}), Task Heap (${humanReadable(taskHeap)}), Task Off-Heap (${humanReadable(taskOffHeap)}) and Managed (${humanReadable(managed)}) exceed configured Total Flink Memory (${humanReadable(totalFlink)}).`
+      );
+    }
+    network = totalFlink - flinkExcludeNetwork;
+    sanityCheckNetworkMemoryWithExplicit(network, totalFlink);
+  } else {
+    // Derive network as inverse-fraction of (flink memory excluding network).
+    network = deriveWithInverseFraction('network memory', flinkExcludeNetwork, getNetworkMemoryRangeFraction());
+  }
+
+  const fm = makeFlinkMemory(frameworkHeap, frameworkOffHeap, taskHeap, taskOffHeap, network, managed);
+  sanityCheckTotalFlinkMemory(fm);
+  return fm;
+}
+
+// Derive when Total Flink Memory is configured (but not all of task+managed).
+// Mirrors TaskExecutorFlinkMemoryUtils.deriveFromTotalFlinkMemory.
+function deriveFromTotalFlink(totalFlink) {
+  const frameworkHeap = getMemory('taskmanager.memory.framework.heap.size');
+  const frameworkOffHeap = getMemory('taskmanager.memory.framework.off-heap.size');
+  const taskOffHeap = getMemory('taskmanager.memory.task.off-heap.size');
+
+  let taskHeap, network, managed;
+
+  if (isSet('taskmanager.memory.task.heap.size')) {
+    taskHeap = getMemory('taskmanager.memory.task.heap.size');
+    managed = deriveManagedAbsoluteOrFraction(totalFlink);
+    const flinkExcludeNetwork = frameworkHeap + frameworkOffHeap + taskHeap + taskOffHeap + managed;
+    if (flinkExcludeNetwork > totalFlink) {
+      throw new Error(
+        `Sum of configured Framework Heap (${humanReadable(frameworkHeap)}), Framework Off-Heap (${humanReadable(frameworkOffHeap)}), Task Heap (${humanReadable(taskHeap)}), Task Off-Heap (${humanReadable(taskOffHeap)}) and Managed (${humanReadable(managed)}) exceed configured Total Flink Memory (${humanReadable(totalFlink)}).`
+      );
+    }
+    network = totalFlink - flinkExcludeNetwork;
+    sanityCheckNetworkMemoryWithExplicit(network, totalFlink);
+  } else {
+    managed = deriveManagedAbsoluteOrFraction(totalFlink);
+    network = deriveWithFraction('network memory', totalFlink, getNetworkMemoryRangeFraction());
+    const flinkExcludeTaskHeap = frameworkHeap + frameworkOffHeap + taskOffHeap + managed + network;
+    if (flinkExcludeTaskHeap > totalFlink) {
+      throw new Error(
+        `Sum of configured Framework Heap (${humanReadable(frameworkHeap)}), Framework Off-Heap (${humanReadable(frameworkOffHeap)}), Task Off-Heap (${humanReadable(taskOffHeap)}), Managed (${humanReadable(managed)}) and Network (${humanReadable(network)}) exceed configured Total Flink Memory (${humanReadable(totalFlink)}).`
+      );
+    }
+    taskHeap = totalFlink - flinkExcludeTaskHeap;
+  }
+
+  const fm = makeFlinkMemory(frameworkHeap, frameworkOffHeap, taskHeap, taskOffHeap, network, managed);
+  sanityCheckTotalFlinkMemory(fm);
+  return fm;
+}
+
+//
+// ============================================================================
+// ProcessMemoryUtils logic — ported from ProcessMemoryUtils.java.
+// ============================================================================
+//
+
+function deriveJvmMetaspaceOverheadWithTotalProcessMemory(totalProcess) {
+  const metaspace = getMemory('taskmanager.memory.jvm-metaspace.size');
+  const overhead = deriveWithFraction('jvm overhead memory', totalProcess, getJvmOverheadRangeFraction());
+  if (metaspace + overhead > totalProcess) {
+    throw new Error(
+      `Sum of configured JVM Metaspace (${humanReadable(metaspace)}) and JVM Overhead (${humanReadable(overhead)}) exceed configured Total Process Memory (${humanReadable(totalProcess)}).`
+    );
+  }
+  return { metaspace, overhead };
+}
+
+function sanityCheckJvmOverhead(derivedOverhead, totalProcess) {
+  const rf = getJvmOverheadRangeFraction();
+  if (derivedOverhead > rf.maxSize || derivedOverhead < rf.minSize) {
+    throw new Error(
+      `Derived JVM Overhead size (${humanReadable(derivedOverhead)}) is not in configured JVM Overhead range [${humanReadable(rf.minSize)}, ${humanReadable(rf.maxSize)}].`
+    );
+  }
+}
+
+function deriveJvmOverheadFromTotalFlinkAndOthers(totalFlink) {
+  const totalProcess = getMemory('taskmanager.memory.process.size');
+  const metaspace = getMemory('taskmanager.memory.jvm-metaspace.size');
+  const totalFlinkAndMeta = totalFlink + metaspace;
+  if (totalProcess < totalFlinkAndMeta) {
+    throw new Error(
+      `The configured Total Process Memory size (${humanReadable(totalProcess)}) is less than the sum of the derived Total Flink Memory size (${humanReadable(totalFlink)}) and the configured or default JVM Metaspace size (${humanReadable(metaspace)}).`
+    );
+  }
+  const overhead = totalProcess - totalFlinkAndMeta;
+  sanityCheckJvmOverhead(overhead, totalProcess);
+  return overhead;
+}
+
+function sanityCheckTotalProcess(totalFlink, metaspace, overhead) {
+  if (!isSet('taskmanager.memory.process.size')) return;
+  const derivedTotal = totalFlink + metaspace + overhead;
+  const configured = getMemory('taskmanager.memory.process.size');
+  if (configured !== derivedTotal) {
+    throw new Error(
+      `Configured and Derived memory sizes (total ${humanReadable(derivedTotal)}) do not add up to the configured Total Process Memory size (${humanReadable(configured)}). Configured and Derived memory sizes are: Total Flink Memory (${humanReadable(totalFlink)}), JVM Metaspace (${humanReadable(metaspace)}), JVM Overhead (${humanReadable(overhead)}).`
+    );
+  }
+}
+
+function deriveJvmMetaspaceOverheadFromTotalFlinkMemory(totalFlink) {
+  const metaspace = getMemory('taskmanager.memory.jvm-metaspace.size');
+  const totalFlinkAndMeta = totalFlink + metaspace;
+  let overhead;
+  if (isSet('taskmanager.memory.process.size')) {
+    overhead = deriveJvmOverheadFromTotalFlinkAndOthers(totalFlink);
+  } else {
+    overhead = deriveWithInverseFraction('jvm overhead memory', totalFlinkAndMeta, getJvmOverheadRangeFraction());
+    sanityCheckTotalProcess(totalFlink, metaspace, overhead);
+  }
+  return { metaspace, overhead };
+}
+
+// Top-level: derive the full TaskExecutorProcessSpec from the configuration.
+// Mirrors ProcessMemoryUtils.memoryProcessSpecFromConfig.
+function computeSpec() {
+  const hasTaskHeap = isSet('taskmanager.memory.task.heap.size');
+  const hasManaged = isSet('taskmanager.memory.managed.size');
+  const hasTotalFlink = isSet('taskmanager.memory.flink.size');
+  const hasTotalProcess = isSet('taskmanager.memory.process.size');
+
+  let flinkMemory;
+  let metaspaceOverhead;
+  let derivationMode;
+
+  if (hasTaskHeap && hasManaged) {
+    derivationMode = 'fine-grained (task.heap + managed.size)';
+    flinkMemory = deriveFromFineGrained();
+    metaspaceOverhead = deriveJvmMetaspaceOverheadFromTotalFlinkMemory(flinkMemory.totalFlink);
+  } else if (hasTotalFlink) {
+    derivationMode = 'from Total Flink Memory';
+    const totalFlink = getMemory('taskmanager.memory.flink.size');
+    flinkMemory = deriveFromTotalFlink(totalFlink);
+    metaspaceOverhead = deriveJvmMetaspaceOverheadFromTotalFlinkMemory(flinkMemory.totalFlink);
+  } else if (hasTotalProcess) {
+    derivationMode = 'from Total Process Memory';
+    const totalProcess = getMemory('taskmanager.memory.process.size');
+    metaspaceOverhead = deriveJvmMetaspaceOverheadWithTotalProcessMemory(totalProcess);
+    const totalFlink = totalProcess - metaspaceOverhead.metaspace - metaspaceOverhead.overhead;
+    flinkMemory = deriveFromTotalFlink(totalFlink);
+  } else {
+    throw new Error(
+      'TaskManager memory configuration failed: Either required fine-grained memory ' +
+      '(taskmanager.memory.task.heap.size AND taskmanager.memory.managed.size), or ' +
+      'Total Flink Memory size (taskmanager.memory.flink.size), or Total Process Memory size ' +
+      '(taskmanager.memory.process.size) need to be configured explicitly.'
+    );
+  }
+
+  const totalProcess = flinkMemory.totalFlink + metaspaceOverhead.metaspace + metaspaceOverhead.overhead;
+  return {
+    derivationMode,
+    flinkMemory,
+    metaspace: metaspaceOverhead.metaspace,
+    overhead: metaspaceOverhead.overhead,
+    totalProcess,
+  };
+}
+
+//
+// ============================================================================
+// UI rendering
+// ============================================================================
+//
+
+function buildForm() {
+  const form = document.getElementById('config-form');
+  const groups = {};
+  for (const o of OPTIONS) {
+    (groups[o.group] ??= []).push(o);
+  }
+  let html = '';
+  for (const groupKey of Object.keys(GROUP_TITLES)) {
+    if (!groups[groupKey]) continue;
+    html += `<div class="section-divider">${GROUP_TITLES[groupKey]}</div>`;
+    for (const o of groups[groupKey]) {
+      const defaultLabel = o.defaultValue === null
+        ? '(derived)'
+        : (o.defaultValue === 'MAX' ? '∞' : String(o.defaultValue));
+      const sliderRow = o.type === 'float' ? `
+          <div class="slider-row">
+            <span class="tick">0</span>
+            <input type="range" min="0" max="0.99" step="0.01" id="slider-${cssId(o.key)}" data-key="${o.key}" />
+            <span class="tick">0.99</span>
+          </div>` : '';
+      html += `
+        <div class="config-row">
+          <label title="${o.key}">${o.label}
+            <span class="default">${o.key} · default: ${defaultLabel}</span>
+          </label>
+          <input type="text" id="in-${cssId(o.key)}" data-key="${o.key}" placeholder="${defaultLabel}" />
+          <button class="reset-btn" data-clear="${o.key}" title="Reset">×</button>
+          ${sliderRow}
+        </div>`;
+    }
+  }
+  form.innerHTML = html;
+  form.querySelectorAll('input[type=text]').forEach(input => {
+    input.addEventListener('input', (e) => {
+      const k = e.target.dataset.key;
+      userConfig[k] = e.target.value;
+      e.target.classList.toggle('set', e.target.value.trim() !== '');
+      syncSliderFromText(k);
+      recompute();
+    });
+  });
+  form.querySelectorAll('input[type=range]').forEach(slider => {
+    slider.addEventListener('input', (e) => {
+      const k = e.target.dataset.key;
+      const v = e.target.value;
+      userConfig[k] = v;
+      const text = document.getElementById('in-' + cssId(k));
+      text.value = v;
+      text.classList.add('set');
+      recompute();
+    });
+  });
+  form.querySelectorAll('[data-clear]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const k = e.target.dataset.clear;
+      userConfig[k] = '';
+      const input = document.getElementById('in-' + cssId(k));
+      input.value = '';
+      input.classList.remove('set');
+      syncSliderFromText(k);
+      recompute();
+    });
+  });
+}
+
+// Keep the range slider's thumb position in sync with the text input.
+// When the text is empty, snap the slider to the option's default.
+function syncSliderFromText(key) {
+  const slider = document.getElementById('slider-' + cssId(key));
+  if (!slider) return;
+  const text = document.getElementById('in-' + cssId(key));
+  const o = opt(key);
+  const v = text.value.trim() !== '' ? parseFloat(text.value) : o.defaultValue;
+  if (!Number.isNaN(v)) slider.value = v;
+}
+
+function cssId(s) { return s.replace(/\./g, '-'); }
+
+function setConfig(values) {
+  for (const o of OPTIONS) {
+    const val = values[o.key] ?? '';
+    userConfig[o.key] = val;
+    const input = document.getElementById('in-' + cssId(o.key));
+    if (input) {
+      input.value = val;
+      input.classList.toggle('set', val !== '');
+    }
+    syncSliderFromText(o.key);
+  }
+  recompute();
+}
+
+function renderError(msg) {
+  document.getElementById('error-box').innerHTML =
+    `<div class="error"><strong>Configuration error:</strong>\n${escapeHtml(msg)}</div>`;
+  document.getElementById('summary').innerHTML = '';
+  document.getElementById('bar-container').innerHTML = '';
+  document.getElementById('memtable-container').innerHTML = '';
+  document.getElementById('jvm-args').textContent = '';
+  document.getElementById('dyn-configs').textContent = '';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function renderSummary(spec) {
+  const fm = spec.flinkMemory;
+  const cards = [
+    { label: 'Total Process Memory', bytes: spec.totalProcess },
+    { label: 'Total Flink Memory', bytes: fm.totalFlink },
+    { label: 'JVM Heap (-Xmx/-Xms)', bytes: fm.jvmHeap },
+    { label: 'JVM Direct (-XX:MaxDirectMemorySize)', bytes: fm.jvmDirect },
+  ];
+  const html = `
+    <div class="summary-grid">
+      ${cards.map(c => `
+        <div class="summary-card">
+          <div class="label">${c.label}</div>
+          <div class="value">${prettySize(c.bytes)}</div>
+          <div class="bytes">${c.bytes.toString()} bytes</div>
+        </div>`).join('')}
+    </div>
+    <div class="card" style="margin-bottom:12px;">
+      <div class="card-title">Derivation</div>
+      Configuration interpreted using: <strong>${spec.derivationMode}</strong>
+    </div>
+  `;
+  document.getElementById('summary').innerHTML = html;
+}
+
+const COLOR = {
+  frameworkHeap: ['#b7eb8f', 'Framework Heap (on-heap)'],
+  taskHeap:      ['#52c41a', 'Task Heap (on-heap)'],
+  frameworkOff:  ['#91d5ff', 'Framework Off-Heap (direct)'],
+  taskOff:       ['#1890ff', 'Task Off-Heap (direct)'],
+  network:       ['#fa8c16', 'Network (direct)'],
+  managed:       ['#722ed1', 'Managed (off-heap)'],
+  metaspace:     ['#eb2f96', 'JVM Metaspace'],
+  overhead:      ['#ffadd2', 'JVM Overhead'],
+};
+
+function renderBar(spec) {
+  const fm = spec.flinkMemory;
+  const total = Number(spec.totalProcess);
+  const segs = [
+    { name: 'frameworkHeap', bytes: fm.frameworkHeap },
+    { name: 'taskHeap',      bytes: fm.taskHeap },
+    { name: 'frameworkOff',  bytes: fm.frameworkOffHeap },
+    { name: 'taskOff',       bytes: fm.taskOffHeap },
+    { name: 'network',       bytes: fm.network },
+    { name: 'managed',       bytes: fm.managed },
+    { name: 'metaspace',     bytes: spec.metaspace },
+    { name: 'overhead',      bytes: spec.overhead },
+  ];
+  const barHtml = segs.map(s => {
+    const pct = total > 0 ? (Number(s.bytes) / total * 100) : 0;
+    if (pct <= 0) return '';
+    const [color, label] = COLOR[s.name];
+    return `<div class="bar-seg" style="background:${color}; flex: ${pct} 0 0;" title="${label}: ${humanReadable(s.bytes)}">${pct >= 6 ? prettySize(s.bytes) : ''}</div>`;
+  }).join('');
+  const legendHtml = segs.map(s => {
+    const [color, label] = COLOR[s.name];
+    return `<span><span class="swatch" style="background:${color};"></span>${label}: ${prettySize(s.bytes)}</span>`;
+  }).join('');
+  document.getElementById('bar-container').innerHTML = `
+    <div class="bar">${barHtml}</div>
+    <div class="bar-legend">${legendHtml}</div>
+  `;
+}
+
+// Vertical nested-box diagram matching the Flink memory model SVG.
+function renderHierarchy(spec) {
+  const fm = spec.flinkMemory;
+  const totalNum = Number(spec.totalProcess);
+  // Allocate heights proportionally to bytes, but enforce a minimum height
+  // so labels are still readable for tiny components.
+  const TARGET_HEIGHT = 540; // total px for the diagram
+  const MIN_LEAF = 24;
+  const leaves = [
+    { key: 'frameworkHeap', name: 'Framework Heap',     bytes: fm.frameworkHeap,    group: 'heap' },
+    { key: 'taskHeap',      name: 'Task Heap',          bytes: fm.taskHeap,         group: 'heap' },
+    { key: 'frameworkOff',  name: 'Framework Off-Heap', bytes: fm.frameworkOffHeap, group: 'offheap' },
+    { key: 'taskOff',       name: 'Task Off-Heap',      bytes: fm.taskOffHeap,      group: 'offheap' },
+    { key: 'network',       name: 'Network',            bytes: fm.network,          group: 'offheap' },
+    { key: 'managed',       name: 'Managed',            bytes: fm.managed,          group: 'managed' },
+    { key: 'metaspace',     name: 'JVM Metaspace',      bytes: spec.metaspace,      group: 'jvm' },
+    { key: 'overhead',      name: 'JVM Overhead',       bytes: spec.overhead,       group: 'jvm' },
+  ];
+
+  // Initial heights pure proportional, then clamp to MIN_LEAF.
+  let raw = leaves.map(l => totalNum > 0 ? (Number(l.bytes) / totalNum) * TARGET_HEIGHT : 0);
+  // Apply minimum to non-zero leaves
+  raw = raw.map((h, i) => leaves[i].bytes === 0n ? 0 : Math.max(h, MIN_LEAF));
+  // Renormalize: subtract surplus over TARGET_HEIGHT proportionally from largest
+  const sum = raw.reduce((a, b) => a + b, 0);
+  const scale = sum > 0 ? TARGET_HEIGHT / sum : 1;
+  const heights = raw.map(h => h * scale);
+
+  function leafHtml(idx) {
+    const l = leaves[idx];
+    const h = heights[idx];
+    if (l.bytes === 0n) {
+      return `<div class="hier-leaf" style="background:${COLOR[l.key][0]}55; height:0; padding:0; border:none;"></div>`;
+    }
+    return `<div class="hier-leaf" style="background:${COLOR[l.key][0]}; height:${h}px;">
+      <div class="hl-name">${l.name}</div>
+      <div class="hl-size">${prettySize(l.bytes)}</div>
+    </div>`;
+  }
+
+  // Group leaves by `group` to render boxes in the diagram.
+  function groupHtml(groupKey, label) {
+    const indices = leaves.map((l, i) => l.group === groupKey ? i : -1).filter(i => i >= 0);
+    if (indices.length === 0) return '';
+    return `
+      <div class="hier-box group">
+        <div class="hier-box-label">${label}</div>
+        ${indices.map(i => leafHtml(i)).join('')}
+      </div>`;
+  }
+
+  const html = `
+    <div class="hier">
+      <div class="hier-box process">
+        <div class="hier-box-label">Total Process Memory · ${prettySize(spec.totalProcess)}</div>
+        <div class="hier-box flink">
+          <div class="hier-box-label">Total Flink Memory · ${prettySize(fm.totalFlink)}</div>
+          ${groupHtml('heap', 'On-Heap (JVM Heap = Xmx)')}
+          ${groupHtml('offheap', 'Off-Heap / JVM Direct')}
+          ${groupHtml('managed', 'Off-Heap / Native (Managed)')}
+        </div>
+        ${groupHtml('jvm', 'JVM (outside Flink memory)')}
+      </div>
+    </div>
+  `;
+  document.getElementById('hier-container').innerHTML = html;
+}
+
+// Mimics the Flink TM UI table: vertical groups for Heap / Off-Heap / Managed / JVM.
+function renderMemTable(spec) {
+  const fm = spec.flinkMemory;
+  const rows = [
+    { group: 'Total Process Memory', name: '', bytes: spec.totalProcess, isSummary: true },
+    { group: 'Total Flink Memory', name: '', bytes: fm.totalFlink, isSummary: true },
+    { group: '— On-Heap —', isHeader: true },
+    { group: 'Framework Heap', bytes: fm.frameworkHeap, key: 'taskmanager.memory.framework.heap.size' },
+    { group: 'Task Heap', bytes: fm.taskHeap, key: 'taskmanager.memory.task.heap.size' },
+    { group: 'JVM Heap (Xmx/Xms)', bytes: fm.jvmHeap, isSubtotal: true },
+    { group: '— Off-Heap (JVM Direct) —', isHeader: true },
+    { group: 'Framework Off-Heap', bytes: fm.frameworkOffHeap, key: 'taskmanager.memory.framework.off-heap.size' },
+    { group: 'Task Off-Heap', bytes: fm.taskOffHeap, key: 'taskmanager.memory.task.off-heap.size' },
+    { group: 'Network', bytes: fm.network, key: 'taskmanager.memory.network.*' },
+    { group: 'JVM Direct (MaxDirectMemorySize)', bytes: fm.jvmDirect, isSubtotal: true },
+    { group: '— Off-Heap (Native) —', isHeader: true },
+    { group: 'Managed Memory', bytes: fm.managed, key: 'taskmanager.memory.managed.*' },
+    { group: '— Outside Flink Memory —', isHeader: true },
+    { group: 'JVM Metaspace (MaxMetaspaceSize)', bytes: spec.metaspace, key: 'taskmanager.memory.jvm-metaspace.size' },
+    { group: 'JVM Overhead', bytes: spec.overhead, key: 'taskmanager.memory.jvm-overhead.*' },
+  ];
+  const html = `
+    <table class="memtable">
+      <thead>
+        <tr><th style="width:280px;">Component</th><th style="width:200px;">Effective size</th><th>Bytes</th></tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => {
+          if (r.isHeader) {
+            return `<tr><td colspan="3" style="background:#fafafa;color:var(--muted);font-weight:600;text-align:center;">${r.group}</td></tr>`;
+          }
+          const cls = r.isSummary ? 'summary-row' : (r.isSubtotal ? 'summary-row' : '');
+          const keyHint = r.key ? `<div style="color:var(--muted);font-size:10px;font-family:ui-monospace,monospace;">${r.key}</div>` : '';
+          return `<tr class="${cls}">
+            <td class="label-cell">${r.group}${keyHint}</td>
+            <td class="value-cell">${prettySize(r.bytes)}</td>
+            <td class="value-cell">${r.bytes.toString()}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+  document.getElementById('memtable-container').innerHTML = html;
+}
+
+// Render the JVM args string Flink itself would generate.
+function renderJvmArgs(spec) {
+  const fm = spec.flinkMemory;
+  const jvmArgs =
+    `-Xmx${fm.jvmHeap} ` +
+    `-Xms${fm.jvmHeap} ` +
+    `-XX:MaxDirectMemorySize=${fm.jvmDirect} ` +
+    `-XX:MaxMetaspaceSize=${spec.metaspace}`;
+  document.getElementById('jvm-args').textContent = jvmArgs;
+
+  const configs = {
+    'taskmanager.memory.framework.heap.size': fm.frameworkHeap.toString() + 'b',
+    'taskmanager.memory.framework.off-heap.size': fm.frameworkOffHeap.toString() + 'b',
+    'taskmanager.memory.task.heap.size': fm.taskHeap.toString() + 'b',
+    'taskmanager.memory.task.off-heap.size': fm.taskOffHeap.toString() + 'b',
+    'taskmanager.memory.network.min': fm.network.toString() + 'b',
+    'taskmanager.memory.network.max': fm.network.toString() + 'b',
+    'taskmanager.memory.managed.size': fm.managed.toString() + 'b',
+    'taskmanager.memory.jvm-metaspace.size': spec.metaspace.toString() + 'b',
+    'taskmanager.memory.jvm-overhead.min': spec.overhead.toString() + 'b',
+    'taskmanager.memory.jvm-overhead.max': spec.overhead.toString() + 'b',
+  };
+  document.getElementById('dyn-configs').textContent =
+    Object.entries(configs).map(([k, v]) => `-D ${k}=${v}`).join(' \\\n');
+}
+
+function recompute() {
+  document.getElementById('error-box').innerHTML = '';
+  try {
+    const spec = computeSpec();
+    renderSummary(spec);
+    renderBar(spec);
+    renderHierarchy(spec);
+    renderMemTable(spec);
+    renderJvmArgs(spec);
+  } catch (e) {
+    renderError(e.message);
+  }
+}
+
+// Quick presets
+const PRESETS = {
+  default: { 'taskmanager.memory.process.size': '1728m' },
+  fine: {
+    'taskmanager.memory.task.heap.size': '512m',
+    'taskmanager.memory.managed.size': '256m',
+  },
+  flink: { 'taskmanager.memory.flink.size': '2g' },
+  large: { 'taskmanager.memory.process.size': '8g' },
+  clear: {},
+};
+
+document.querySelectorAll('[data-preset]').forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    setConfig(PRESETS[e.target.dataset.preset] || {});
+  });
+});
+
+// Initial render with the canonical default.
+buildForm();
+setConfig(PRESETS.default);
+</script>
+</body>
+</html>
